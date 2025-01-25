@@ -26,49 +26,6 @@ func Test() error {
 	return cmd.Run()
 }
 
-func Run() error {
-	mg.Deps(Build)
-	fmt.Println("Running buildvault and piping output to buildctl...")
-
-	// Create a pipe
-	r, w, _ := os.Pipe()
-
-	// First command: ./buildvault
-	buildvaultCmd := exec.Command("./buildvault")
-	buildvaultCmd.Stdout = w
-	buildvaultCmd.Stderr = os.Stderr
-
-	// Second command: ./tools/buildkit/bin/buildctl build
-	buildctlCmd := exec.Command("./tools/buildkit/bin/buildctl", "--addr", "unix://$XDG_RUNTIME_DIR/buildkit/buildkitd.sock", "build")
-	buildctlCmd.Stdin = r
-	buildctlCmd.Stdout = os.Stdout
-	buildctlCmd.Stderr = os.Stderr
-
-	// Start the first command
-	if err := buildvaultCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start buildvault: %w", err)
-	}
-
-	// Start the second command
-	if err := buildctlCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start buildctl: %w", err)
-	}
-
-	// Close the write-end of the pipe in the current process
-	w.Close()
-
-	// Wait for both commands to finish
-	if err := buildvaultCmd.Wait(); err != nil {
-		return fmt.Errorf("buildvault command failed: %w", err)
-	}
-
-	if err := buildctlCmd.Wait(); err != nil {
-		return fmt.Errorf("buildctl command failed: %w", err)
-	}
-
-	return nil
-}
-
 func StartBuildkit() error {
 
 	mg.Deps(StopBuildkit)
@@ -152,7 +109,7 @@ func StopBuildkit() error {
 func Build() error {
 	mg.Deps(InstallDeps)
 	fmt.Println("Building...")
-	cmd := exec.Command("go", "build", "-o", "buildvault", ".")
+	cmd := exec.Command("go", "build", "-o", "buildvault", "src/main.go")
 	return cmd.Run()
 }
 
