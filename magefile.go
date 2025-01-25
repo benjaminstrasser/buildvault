@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
+	"time"
 
 	"github.com/magefile/mage/mg" // mg contains helpful utility functions, like Deps
 )
@@ -68,12 +70,13 @@ func Run() error {
 }
 
 func StartBuildkit() error {
+
+	mg.Deps(StopBuildkit)
+
 	fmt.Println("Starting Buildkit it...")
 
 	// Command to start the Buildkit daemon
 	cmd := exec.Command("./tools/rootless/bin/rootlesskit", "./tools/buildkit/bin/buildkitd")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
 	// Start the command and detach it from the current process
 	if err := cmd.Start(); err != nil {
@@ -87,24 +90,22 @@ func StartBuildkit() error {
 }
 
 func StopBuildkit() error {
-
 	fmt.Println("Checking if Buildkit daemon is already running...")
 
-	// Check if buildkitd is already running
+	// Check if rootlesskit is already running
 	cmd := exec.Command("pgrep", "-x", "rootlesskit")
 	output, err := cmd.Output()
-	exitErr, ok := err.(*exec.ExitError);
+	exitErr, ok := err.(*exec.ExitError)
 
 	if err == nil && len(output) > 0 {
 		fmt.Println("Buildkit daemon is running.")
-
 	} else if ok && exitErr.ExitCode() == 1 {
 		fmt.Println("Buildkit daemon is not running.")
 		return nil
 	} else if ok && exitErr.ExitCode() != 1 {
 		// Exit code 1 means no process found; other exit codes should be handled as errors
 		return fmt.Errorf("error checking for Buildkit daemon: %w", err)
-	} 
+	}
 
 	fmt.Println("Stopping Buildkit daemon...")
 
@@ -113,15 +114,39 @@ func StopBuildkit() error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Run the command
+	// Run the command to terminate rootlesskit
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to stop Buildkit daemon: %w", err)
 	}
 
-	fmt.Println("Buildkit daemon stopped.")
-	
+	fmt.Println("Waiting for Buildkit daemon and its child processes to stop...")
+
+	// Check if any `rootlesskit` processes are still running
+	for {
+		cmd = exec.Command("pgrep", "-x", "rootlesskit")
+		output, err = cmd.Output()
+
+		if err != nil {
+			// If no processes are found (exit code 1), break the loop
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+				fmt.Println("All Buildkit daemon processes stopped.")
+				break
+			}
+			// Handle other errors
+			return fmt.Errorf("error checking for Buildkit daemon processes: %w", err)
+		}
+
+		// Output contains remaining process IDs, so continue waiting
+		if len(output) > 0 {
+			fmt.Printf("Still waiting for processes: %s\n", strings.TrimSpace(string(output)))
+			time.Sleep(1 * time.Second) // Wait before rechecking
+		}
+	}
+
+	fmt.Println("Buildkit daemon and all child processes are completely stopped.")
 	return nil
 }
+
 
 // A build step that requires additional params, or platform specific steps for example
 func Build() error {
