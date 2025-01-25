@@ -15,34 +15,63 @@ import (
 // If not set, running mage will list available targets
 // var Default = Build
 
-func Run() error {
-	mg.Deps(Build, startBuildkitDeamon)
-	fmt.Println("Running buildvault...")
-	cmd := exec.Command("./buildvault")
+
+func Test() error {
+	fmt.Println("Testing...")
+	cmd := exec.Command("echo", "$XDG_RUNTIME_DIR")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
-func startBuildkitDeamon() error {
-	fmt.Println("Checking if Buildkit daemon is already running...")
+func Run() error {
+	mg.Deps(Build)
+	fmt.Println("Running buildvault and piping output to buildctl...")
 
-	// Check if buildkitd is already running
-	cmd := exec.Command("pgrep", "-x", "buildkitd")
-	output, err := cmd.Output()
+	// Create a pipe
+	r, w, _ := os.Pipe()
 
-	if err == nil && len(output) > 0 {
-		fmt.Println("Buildkit daemon is already running. Skipping start.")
-		return nil
-	} else if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 1 {
-		// Exit code 1 means no process found; other exit codes should be handled as errors
-		return fmt.Errorf("error checking for Buildkit daemon: %w", err)
+	// First command: ./buildvault
+	buildvaultCmd := exec.Command("./buildvault")
+	buildvaultCmd.Stdout = w
+	buildvaultCmd.Stderr = os.Stderr
+
+	// Second command: ./tools/buildkit/bin/buildctl build
+	buildctlCmd := exec.Command("./tools/buildkit/bin/buildctl", "--addr", "unix://$XDG_RUNTIME_DIR/buildkit/buildkitd.sock", "build")
+	buildctlCmd.Stdin = r
+	buildctlCmd.Stdout = os.Stdout
+	buildctlCmd.Stderr = os.Stderr
+
+	// Start the first command
+	if err := buildvaultCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start buildvault: %w", err)
 	}
 
-	fmt.Println("Buildkit daemon not running. Starting it...")
+	// Start the second command
+	if err := buildctlCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start buildctl: %w", err)
+	}
+
+	// Close the write-end of the pipe in the current process
+	w.Close()
+
+	// Wait for both commands to finish
+	if err := buildvaultCmd.Wait(); err != nil {
+		return fmt.Errorf("buildvault command failed: %w", err)
+	}
+
+	if err := buildctlCmd.Wait(); err != nil {
+		return fmt.Errorf("buildctl command failed: %w", err)
+	}
+
+	return nil
+}
+
+func StartBuildkit() error {
+	fmt.Println("Starting Buildkit it...")
 
 	// Command to start the Buildkit daemon
-	cmd = exec.Command("./tools/rootless/bin/rootlesskit", "./tools/buildkit/bin/buildkitd")
+	cmd := exec.Command("./tools/rootless/bin/rootlesskit", "./tools/buildkit/bin/buildkitd")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -54,6 +83,43 @@ func startBuildkitDeamon() error {
 	// Print the process ID for debugging
 	fmt.Printf("Buildkit daemon started with PID: %d\n", cmd.Process.Pid)
 
+	return nil
+}
+
+func StopBuildkit() error {
+
+	fmt.Println("Checking if Buildkit daemon is already running...")
+
+	// Check if buildkitd is already running
+	cmd := exec.Command("pgrep", "-x", "rootlesskit")
+	output, err := cmd.Output()
+	exitErr, ok := err.(*exec.ExitError);
+
+	if err == nil && len(output) > 0 {
+		fmt.Println("Buildkit daemon is running.")
+
+	} else if ok && exitErr.ExitCode() == 1 {
+		fmt.Println("Buildkit daemon is not running.")
+		return nil
+	} else if ok && exitErr.ExitCode() != 1 {
+		// Exit code 1 means no process found; other exit codes should be handled as errors
+		return fmt.Errorf("error checking for Buildkit daemon: %w", err)
+	} 
+
+	fmt.Println("Stopping Buildkit daemon...")
+
+	// Command to stop the Buildkit daemon
+	cmd = exec.Command("pkill", "-x", "rootlesskit")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Run the command
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stop Buildkit daemon: %w", err)
+	}
+
+	fmt.Println("Buildkit daemon stopped.")
+	
 	return nil
 }
 

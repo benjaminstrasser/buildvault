@@ -1,0 +1,3 @@
+./buildvault | ./tools/buildkit/bin/buildctl --addr unix:///run/user/1000//buildkit/buildkitd.sock build
+./buildvault | ./tools/buildkit/bin/buildctl --addr unix:///run/user/1000//buildkit/buildkitd.sock build --output type=docker,name=testimage | docker load
+./buildvault | ./tools/buildkit/bin/buildctl --addr unix:///run/user/1000//buildkit/buildkitd.sock build --output type=docker,name=testimage | docker load && docker run -it testimage /bin/sh
