@@ -109,7 +109,7 @@ func StopBuildkit() error {
 func Build() error {
 	mg.Deps(InstallDeps)
 	fmt.Println("Building...")
-	cmd := exec.Command("go", "build", "-o", "buildvault", "src/main.go")
+	cmd := exec.Command("go", "build", "-o", "buildvault", "main.go")
 	return cmd.Run()
 }
 

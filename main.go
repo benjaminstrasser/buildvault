@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"flag"
+
+	// "fmt"
 	"os"
+	// "path/filepath"
 
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/util/system"
@@ -23,7 +26,20 @@ func main() {
 	flag.Parse()
 
 	bk := buildkit(opt)
-	out := bk.Run(llb.Shlex("ls -l /bin")) // debug output
+
+	var AddOptions = &llb.CopyInfo{
+		FollowSymlinks:      true,
+		CopyDirContentsOnly: true,
+		AttemptUnpack:       true,
+		CreateDestPath:      true,
+		AllowWildcard:       true,
+		AllowEmptyWildcard:  true,
+	}
+
+	// Create build state
+	out := bk.Run(llb.Shlex("ls -l /bin")).
+			File(llb.Mkdir("/app", 0755),).
+			File(llb.Copy(llb.Local("context"), "source_directory/localfile.txt", "/app", AddOptions)) // add localfile into image 
 
 	dt, err := out.Marshal(context.TODO(), llb.LinuxAmd64)
 	if err != nil {
