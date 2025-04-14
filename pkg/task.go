@@ -85,7 +85,7 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 		}
 
 		// Copy the file content to the container
-		err = cli.CopyToContainer(ctx, resp.ID, filepath.Dir(containerPath), srcFile, container.CopyToOptions{})
+		err = cli.CopyToContainer(ctx, resp.ID, filepath.Dir(containerPath), srcFile, container.CopyToContainerOptions{})
 		if err != nil {
 			return fmt.Errorf("error copying input artifact to container: %w", err)
 		}
@@ -159,8 +159,6 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 // ExtractFileFromTar extracts a file from a tar archive
 func ExtractFileFromTar(tarReader io.ReadCloser, destPath string) error {
 	// Use standard tar package for extraction
-	tr := tar.NewReader(tarReader)
-
 	tr := tar.NewReader(tarReader)
 
 	// Create directory for file if it doesn't exist
