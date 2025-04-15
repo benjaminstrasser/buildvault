@@ -68,6 +68,15 @@ func main() {
 					},
 				},
 			},
+			{
+				Task: &task1,
+				Artifacts: []pkg.Artifact{
+					{
+						From: "/output/test.txt",
+						To:   "/output/test.txt",
+					},
+				},
+			},
 		},
 		Commands: []string{
 			"mkdir -p /combined",
