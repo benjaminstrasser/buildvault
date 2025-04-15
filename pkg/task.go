@@ -169,6 +169,16 @@ func (t *Task) executeCommands(ctx context.Context, cli *client.Client) error {
 			return fmt.Errorf("error StdCopy: %w", err)
 		}
 		fmt.Println() // Add newline for command output separation
+
+		// Check the exit code of the command
+		inspectResp, err := cli.ContainerExecInspect(ctx, execResp.ID)
+		if err != nil {
+			return fmt.Errorf("error inspecting exec for command '%s': %w", cmd, err)
+		}
+
+		if inspectResp.ExitCode != 0 {
+			return fmt.Errorf("command '%s' failed with exit code %d", cmd, inspectResp.ExitCode)
+		}
 	}
 
 	return nil
