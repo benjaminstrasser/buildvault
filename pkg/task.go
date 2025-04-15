@@ -42,12 +42,12 @@ func (t *Task) generateContainerName() string {
 // findTaskContainer looks for a container for the specified task
 func findTaskContainer(ctx context.Context, cli *client.Client, taskName string) (string, bool, error) {
 	// Search for containers with the task name in their name
-	filters := filters.NewArgs()
-	filters.Add("name", fmt.Sprintf("buildvault_%s_", taskName))
+	listFilters := filters.NewArgs()
+	listFilters.Add("name", fmt.Sprintf("buildvault_%s_", taskName))
 
 	containers, err := cli.ContainerList(ctx, container.ListOptions{
 		All:     true, // Include stopped containers
-		Filters: filters,
+		Filters: listFilters,
 	})
 	if err != nil {
 		return "", false, fmt.Errorf("error searching for task container: %w", err)
@@ -103,12 +103,12 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 
 	var containerID string
 
-	filters := filters.NewArgs()
-	filters.Add("name", containerName)
+	listFilters := filters.NewArgs()
+	listFilters.Add("name", containerName)
 
 	containers, err := cli.ContainerList(ctx, container.ListOptions{
 		All:     true,
-		Filters: filters,
+		Filters: listFilters,
 	})
 	if err != nil {
 		return fmt.Errorf("error checking for existing container: %w", err)
@@ -137,7 +137,10 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 	if err != nil {
 		return fmt.Errorf("error pulling image: %w", err)
 	}
-	io.Copy(os.Stdout, reader)
+	_, err = io.Copy(os.Stdout, reader)
+	if err != nil {
+		return fmt.Errorf("error Copying stdout to reader: %w", err)
+	}
 
 	// Create a new container with our specific name
 	resp, err := cli.ContainerCreate(ctx, &container.Config{
@@ -205,7 +208,10 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 		}
 		defer attachResp.Close()
 
-		stdcopy.StdCopy(os.Stdout, os.Stderr, attachResp.Reader)
+		_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, attachResp.Reader)
+		if err != nil {
+			return fmt.Errorf("error StdCopy: %w", err)
+		}
 		fmt.Println() // Add newline for command output separation
 	}
 
