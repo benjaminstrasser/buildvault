@@ -26,6 +26,11 @@ type Task struct {
 
 // generateContainerName creates a deterministic name for the task container
 func (t *Task) generateContainerName() string {
+	hash := t.generateHash()
+	return fmt.Sprintf("buildvault_%s_%s", t.Name, hash)
+}
+
+func (t *Task) generateHash() string {
 	// Create a hash based on task name, image, and commands for uniqueness
 	hasher := sha256.New()
 	hasher.Write([]byte(t.Name))
@@ -35,8 +40,16 @@ func (t *Task) generateContainerName() string {
 	commandsJSON, _ := json.Marshal(t.Commands)
 	hasher.Write(commandsJSON)
 
+	// Loop over dependencies and include them in the hash
+	for taskName, filePatterns := range t.Dependencies {
+		hasher.Write([]byte(taskName))
+		for _, pattern := range filePatterns {
+			hasher.Write([]byte(pattern))
+		}
+	}
+
 	hash := hex.EncodeToString(hasher.Sum(nil))[:12]
-	return fmt.Sprintf("buildvault_%s_%s", t.Name, hash)
+	return hash
 }
 
 // findTaskContainer looks for a container for the specified task
