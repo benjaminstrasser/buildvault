@@ -83,6 +83,17 @@ func startContainer(ctx context.Context, containerID string, cli *client.Client)
 	return nil
 }
 
+func stopContainer(ctx context.Context, containerID string, cli *client.Client) error {
+	// Stop the container but don't remove it - it will be available for future tasks
+	fmt.Printf("Sending SIGTERM to conatiner: %s\n", containerID)
+	if err := cli.ContainerStop(ctx, containerID, container.StopOptions{
+		Signal: "SIGTERM",
+	}); err != nil {
+		return fmt.Errorf("error stopping container: %w", err)
+	}
+	return nil
+}
+
 // copyBetweenContainers copies files from one container to another
 func copyBetweenContainers(ctx context.Context, cli *client.Client, sourceContainerID, targetContainerID, sourcePath, targetPath string) error {
 	// Get file content from source container

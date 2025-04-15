@@ -144,6 +144,36 @@ func (t *Task) executeDependenciesAndCopyArtifacts(ctx context.Context, cli *cli
 	return nil
 }
 
+func (t *Task) executeCommands(ctx context.Context, cli *client.Client) error {
+	// Execute all commands in sequence
+	for idx, cmd := range t.Commands {
+		fmt.Printf("Executing command %d: %s\n", idx+1, cmd)
+
+		execResp, err := cli.ContainerExecCreate(ctx, t.containerID, container.ExecOptions{
+			Cmd:          []string{"sh", "-c", cmd},
+			AttachStdout: true,
+			AttachStderr: true,
+		})
+		if err != nil {
+			return fmt.Errorf("error creating exec for command '%s': %w", cmd, err)
+		}
+
+		attachResp, err := cli.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{})
+		if err != nil {
+			return fmt.Errorf("error attaching to exec for command '%s': %w", cmd, err)
+		}
+		defer attachResp.Close()
+
+		_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, attachResp.Reader)
+		if err != nil {
+			return fmt.Errorf("error StdCopy: %w", err)
+		}
+		fmt.Println() // Add newline for command output separation
+	}
+
+	return nil
+}
+
 // Execute runs the task:
 // 1. Creates or reuses a container with a deterministic name based on task properties
 // 2. Copies artifacts from dependency task containers
@@ -171,38 +201,12 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 		return err
 	}
 
-	// Execute all commands in sequence
-	for idx, cmd := range t.Commands {
-		fmt.Printf("Executing command %d: %s\n", idx+1, cmd)
-
-		execResp, err := cli.ContainerExecCreate(ctx, t.containerID, container.ExecOptions{
-			Cmd:          []string{"sh", "-c", cmd},
-			AttachStdout: true,
-			AttachStderr: true,
-		})
-		if err != nil {
-			return fmt.Errorf("error creating exec for command '%s': %w", cmd, err)
-		}
-
-		attachResp, err := cli.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{})
-		if err != nil {
-			return fmt.Errorf("error attaching to exec for command '%s': %w", cmd, err)
-		}
-		defer attachResp.Close()
-
-		_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, attachResp.Reader)
-		if err != nil {
-			return fmt.Errorf("error StdCopy: %w", err)
-		}
-		fmt.Println() // Add newline for command output separation
+	if err := t.executeCommands(ctx, cli); err != nil {
+		return err
 	}
 
-	// Stop the container but don't remove it - it will be available for future tasks
-	fmt.Printf("Sending SIGTERM to conatiner: %s\n", t.containerID)
-	if err := cli.ContainerStop(ctx, t.containerID, container.StopOptions{
-		Signal: "SIGTERM",
-	}); err != nil {
-		return fmt.Errorf("error stopping container: %w", err)
+	if err := stopContainer(ctx, t.containerID, cli); err != nil {
+		return err
 	}
 
 	fmt.Printf("Task '%s' execution complete. Container '%s' is stopped but preserved.\n",
