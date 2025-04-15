@@ -8,20 +8,29 @@ import (
 	"fmt"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-	"io"
 	"os"
-	"path/filepath"
+	"slices"
 )
 
 // Task represents a container-based task with a base image and a set of commands to run.
 type Task struct {
-	Name         string              // Name of the task (used for container identification)
-	BaseImage    string              // Base Docker image to use
-	Commands     []string            // Slice of commands to execute inside the container
-	Dependencies map[string][]string // Map of task name to file patterns to copy from that task
+	Name         string       // Name of the task (used for container identification)
+	BaseImage    string       // Base Docker image to use
+	Commands     []string     // Slice of commands to execute inside the container
+	Dependencies []Dependency // Map of task name to file patterns to copy from that task
+	containerID  string       // id of the docker container
+}
+
+type Artifact struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type Dependency struct {
+	Task      *Task
+	Artifacts []Artifact `json:"artifacts"`
 }
 
 // generateContainerName creates a deterministic name for the task container
@@ -41,10 +50,11 @@ func (t *Task) generateHash() string {
 	hasher.Write(commandsJSON)
 
 	// Loop over dependencies and include them in the hash
-	for taskName, filePatterns := range t.Dependencies {
-		hasher.Write([]byte(taskName))
-		for _, pattern := range filePatterns {
-			hasher.Write([]byte(pattern))
+	for _, dependency := range t.Dependencies {
+		hasher.Write([]byte(dependency.Task.Name))
+		for _, pattern := range dependency.Artifacts {
+			hasher.Write([]byte(pattern.To))
+			hasher.Write([]byte(pattern.From))
 		}
 	}
 
@@ -73,33 +83,62 @@ func findTaskContainer(ctx context.Context, cli *client.Client, taskName string)
 	return "", false, nil
 }
 
-// copyBetweenContainers copies files from one container to another
-func copyBetweenContainers(ctx context.Context, cli *client.Client, sourceContainerID, targetContainerID, sourcePath, targetPath string) error {
-	// Get file content from source container
-	reader, _, err := cli.CopyFromContainer(ctx, sourceContainerID, sourcePath)
-	if err != nil {
-		return fmt.Errorf("error copying from source container: %w", err)
-	}
-	defer reader.Close()
-
-	// Create target directory if needed
-	targetDir := filepath.Dir(targetPath)
-	if targetDir != "." {
-		execResp, err := cli.ContainerExecCreate(ctx, targetContainerID, container.ExecOptions{
-			Cmd: []string{"mkdir", "-p", targetDir},
-		})
-		if err != nil {
-			return fmt.Errorf("error creating directory in target container: %w", err)
-		}
-		if err := cli.ContainerExecStart(ctx, execResp.ID, container.ExecStartOptions{}); err != nil {
-			return fmt.Errorf("error creating directory in target container: %w", err)
-		}
+func (t *Task) isCircularDependencyFree(ctx context.Context, parentHashes []string) bool {
+	if len(t.Dependencies) == 0 {
+		return true
 	}
 
-	// Copy to target container
-	err = cli.CopyToContainer(ctx, targetContainerID, targetDir, reader, container.CopyToContainerOptions{})
-	if err != nil {
-		return fmt.Errorf("error copying to target container: %w", err)
+	currentHash := t.generateHash()
+
+	// Check if current task is already in the parent chain (circular dependency)
+	if slices.Contains(parentHashes, currentHash) {
+		return false
+	}
+
+	// Create a new slice for this level to avoid modifying the original
+	newParentHashes := append(append([]string{}, parentHashes...), currentHash)
+
+	// Check all dependencies recursively
+	for _, dependency := range t.Dependencies {
+		if !dependency.Task.isCircularDependencyFree(ctx, newParentHashes) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (t *Task) executeDependenciesAndCopyArtifacts(ctx context.Context, cli *client.Client) error {
+	if len(t.Dependencies) == 0 {
+		fmt.Println("No dependencies found")
+		return nil
+	}
+
+	if !t.isCircularDependencyFree(ctx, []string{}) {
+		fmt.Println("Circular dependency found")
+	}
+
+	fmt.Println("Processing dependencies:")
+
+	fmt.Println("Executing dependencies:")
+	// TODO goroutines for parallelism
+	for _, dependency := range t.Dependencies {
+		fmt.Printf("- %s\n", dependency.Task.Name)
+		if err := dependency.Task.Execute(ctx, cli); err != nil {
+			return fmt.Errorf("error executing task dependency %s:  %w", dependency.Task.Name, err)
+		}
+	}
+
+	fmt.Println("Copying artifacts from dependencies:")
+	// run afterward to ensure ordering is kept consistent after goroutines run
+	for _, dependency := range t.Dependencies {
+		fmt.Printf("- %s\n", dependency.Task.Name)
+		for _, artifact := range dependency.Artifacts {
+			fmt.Printf("  Copying %s from task '%s' to current task at %s\n", artifact.From, dependency.Task.Name, artifact.To)
+			if err := copyBetweenContainers(ctx, cli, dependency.Task.containerID, t.containerID, artifact.From, artifact.To); err != nil {
+				return fmt.Errorf("error copying dependency file %s: %w", artifact.From, err)
+			}
+		}
 	}
 
 	return nil
@@ -114,99 +153,29 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 	containerName := t.generateContainerName()
 	fmt.Printf("Task: %s (Container: %s)\n", t.Name, containerName)
 
-	var containerID string
+	if err := cleanUpRunningContainer(ctx, containerName, cli); err != nil {
+		return err
+	}
 
-	listFilters := filters.NewArgs()
-	listFilters.Add("name", containerName)
-
-	containers, err := cli.ContainerList(ctx, container.ListOptions{
-		All:     true,
-		Filters: listFilters,
-	})
+	resp, err := createLongLivedContainer(ctx, containerName, t.BaseImage, cli)
 	if err != nil {
-		return fmt.Errorf("error checking for existing container: %w", err)
+		return err
+	}
+	t.containerID = resp.ID
+
+	if err := startContainer(ctx, t.containerID, cli); err != nil {
+		return err
 	}
 
-	if len(containers) > 0 {
-		containerID = containers[0].ID
-		fmt.Printf("Found existing container %s, removing it...\n", containerID[:12])
-
-		// Stop it if it's running
-		if containers[0].State == "running" {
-			if err := cli.ContainerStop(ctx, containerID, container.StopOptions{}); err != nil {
-				return fmt.Errorf("error stopping existing container: %w", err)
-			}
-		}
-
-		// Remove it to start fresh
-		if err := cli.ContainerRemove(ctx, containerID, container.RemoveOptions{}); err != nil {
-			return fmt.Errorf("error removing existing container: %w", err)
-		}
-	}
-
-	// Pull the image
-	fmt.Printf("Pulling image: %s\n", t.BaseImage)
-	reader, err := cli.ImagePull(ctx, t.BaseImage, image.PullOptions{})
-	if err != nil {
-		return fmt.Errorf("error pulling image: %w", err)
-	}
-	_, err = io.Copy(os.Stdout, reader)
-	if err != nil {
-		return fmt.Errorf("error Copying stdout to reader: %w", err)
-	}
-
-	// Create a new container with our specific name
-	resp, err := cli.ContainerCreate(ctx, &container.Config{
-		Image: t.BaseImage,
-		Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container alive
-		Tty:   true,
-	}, nil, nil, nil, containerName) // Use our deterministic name
-	if err != nil {
-		return fmt.Errorf("error creating container: %w", err)
-	}
-
-	containerID = resp.ID
-
-	// Start the container
-	if err := cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		return fmt.Errorf("error starting container: %w", err)
-	}
-	fmt.Printf("Container started with ID: %s\n", containerID[:12])
-
-	// Process dependencies if any
-	if len(t.Dependencies) > 0 {
-		fmt.Println("Processing dependencies:")
-
-		for dependencyTaskName, filePaths := range t.Dependencies {
-			// Find the container for the dependency task
-			sourceID, found, err := findTaskContainer(ctx, cli, dependencyTaskName)
-			if err != nil {
-				return err
-			}
-
-			if !found {
-				return fmt.Errorf("dependency container for task '%s' not found", dependencyTaskName)
-			}
-
-			fmt.Printf("  Found dependency container for task '%s': %s\n", dependencyTaskName, sourceID[:12])
-
-			// Copy each file from the dependency container
-			for _, path := range filePaths {
-				fmt.Printf("  Copying %s from task '%s' to current task\n", path, dependencyTaskName)
-
-				// By default, we copy to the same path in the target container
-				if err := copyBetweenContainers(ctx, cli, sourceID, containerID, path, path); err != nil {
-					return fmt.Errorf("error copying dependency file %s: %w", path, err)
-				}
-			}
-		}
+	if err := t.executeDependenciesAndCopyArtifacts(ctx, cli); err != nil {
+		return err
 	}
 
 	// Execute all commands in sequence
 	for idx, cmd := range t.Commands {
 		fmt.Printf("Executing command %d: %s\n", idx+1, cmd)
 
-		execResp, err := cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+		execResp, err := cli.ContainerExecCreate(ctx, t.containerID, container.ExecOptions{
 			Cmd:          []string{"sh", "-c", cmd},
 			AttachStdout: true,
 			AttachStderr: true,
@@ -229,9 +198,9 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 	}
 
 	// Stop the container but don't remove it - it will be available for future tasks
-	fmt.Printf("Sending SIGKILL to conatiner: %s\n", containerID)
-	if err := cli.ContainerStop(ctx, containerID, container.StopOptions{
-		Signal: "SIGKILL",
+	fmt.Printf("Sending SIGTERM to conatiner: %s\n", t.containerID)
+	if err := cli.ContainerStop(ctx, t.containerID, container.StopOptions{
+		Signal: "SIGTERM",
 	}); err != nil {
 		return fmt.Errorf("error stopping container: %w", err)
 	}

@@ -17,7 +17,6 @@ import (
 // If not set, running mage will list available targets
 // var Default = Build
 
-
 func Test() error {
 	fmt.Println("Testing...")
 	cmd := exec.Command("echo", "$XDG_RUNTIME_DIR")
@@ -103,7 +102,6 @@ func StopBuildkit() error {
 	fmt.Println("Buildkit daemon and all child processes are completely stopped.")
 	return nil
 }
-
 
 // A build step that requires additional params, or platform specific steps for example
 func Build() error {

@@ -30,17 +30,20 @@ func main() {
 		},
 	}
 
-	log.Println("Executing first task...")
-	if err := task1.Execute(ctx, cli); err != nil {
-		log.Fatalf("Error executing first task: %v", err)
-	}
-
 	// Second task: use the file from the first task
 	task2 := pkg.Task{
 		Name:      "use-file",
 		BaseImage: "docker.io/library/alpine",
-		Dependencies: map[string][]string{
-			"generate-file": {"/output/test.txt"}, // Copy test.txt from generate-file task
+		Dependencies: []pkg.Dependency{
+			{
+				Task: &task1,
+				Artifacts: []pkg.Artifact{
+					{
+						From: "/output/test.txt",
+						To:   "/output/test.txt",
+					},
+				},
+			},
 		},
 		Commands: []string{
 			"cat /output/test.txt",
@@ -51,18 +54,20 @@ func main() {
 		},
 	}
 
-	log.Println("Executing second task...")
-	if err := task2.Execute(ctx, cli); err != nil {
-		log.Fatalf("Error executing second task: %v", err)
-	}
-
 	// Third task: use files from both previous tasks
 	task3 := pkg.Task{
 		Name:      "combine-files",
 		BaseImage: "docker.io/library/alpine",
-		Dependencies: map[string][]string{
-			"generate-file": {"/output/test.txt"},    // Original file
-			"use-file":      {"/final/modified.txt"}, // Modified file
+		Dependencies: []pkg.Dependency{
+			{
+				Task: &task2,
+				Artifacts: []pkg.Artifact{
+					{
+						From: "/final/modified.txt",
+						To:   "/final/modified.txt",
+					},
+				},
+			},
 		},
 		Commands: []string{
 			"mkdir -p /combined",
