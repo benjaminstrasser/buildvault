@@ -10,6 +10,8 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	imagetypes "github.com/docker/docker/api/types/image"
+	"io"
 	"os"
 	"slices"
 )
@@ -60,6 +62,56 @@ func (t *Task) generateHash() string {
 
 	hash := hex.EncodeToString(hasher.Sum(nil))[:12]
 	return hash
+}
+
+func imageExistsLocally(cli *client.Client, baseImage string) (bool, error){
+	images, err := cli.ImageList(context.Background(), imagetypes.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("unable to get images, please make sure that docker daemon is up and running: %w", err)
+	}
+
+	for _, image := range images {
+		// Check if the image name matches the one we are looking for
+		if image.RepoTags != nil {
+			for _, tag := range image.RepoTags {
+				// fmt.Println("image tag:",tag)
+				// fmt.Println("image name:",baseImage)
+				if tag == baseImage {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+
+func pullImage(ctx context.Context, cli *client.Client, t *Task) error {
+	// Check if the image already exists locally
+    exists, err := imageExistsLocally(cli, t.BaseImage)
+    if err != nil {
+        return fmt.Errorf("failed to check for image: %w", err)
+    }
+    
+    if exists {
+        fmt.Printf("Image %s already exists locally\n", t.BaseImage)
+        return nil
+    }
+    
+    // Image doesn't exist, pull it
+    fmt.Printf("Pulling image: %s\n", t.BaseImage)
+    reader, err := cli.ImagePull(ctx, t.BaseImage, imagetypes.PullOptions{})
+    if err != nil {
+        return fmt.Errorf("failed to pull image: %w", err)
+    }
+    defer reader.Close()
+    
+    // Stream the pull progress to stdout
+    if _, err := io.Copy(os.Stdout, reader); err != nil {
+        return fmt.Errorf("error streaming pull output: %w", err)
+    }
+    
+    return nil
 }
 
 // findTaskContainer looks for a container for the specified task
@@ -194,6 +246,10 @@ func (t *Task) Execute(ctx context.Context, cli *client.Client) error {
 	fmt.Printf("Task: %s (Container: %s)\n", t.Name, containerName)
 
 	if err := cleanUpRunningContainer(ctx, containerName, cli); err != nil {
+		return err
+	}
+
+	if err := pullImage(ctx, cli, t); err != nil {
 		return err
 	}
 

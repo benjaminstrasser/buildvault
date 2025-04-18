@@ -19,7 +19,7 @@ func main() {
 	// First task: create a text file
 	task1 := pkg.Task{
 		Name:      "generate-file",
-		BaseImage: "docker.io/library/alpine",
+		BaseImage: "alpine:latest",
 		Commands: []string{
 			"mkdir data",
 			"echo 'hello world' > /data/test.txt",
@@ -33,7 +33,7 @@ func main() {
 	// Second task: use the file from the first task
 	task2 := pkg.Task{
 		Name:      "use-file",
-		BaseImage: "docker.io/library/alpine",
+		BaseImage: "alpine:latest",
 		Dependencies: []pkg.Dependency{
 			{
 				Task: &task1,
@@ -57,7 +57,7 @@ func main() {
 	// Third task: use files from both previous tasks
 	task3 := pkg.Task{
 		Name:      "combine-files",
-		BaseImage: "docker.io/library/alpine",
+		BaseImage: "alpine:latest",
 		Dependencies: []pkg.Dependency{
 			{
 				Task: &task2,
