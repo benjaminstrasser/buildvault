@@ -74,8 +74,6 @@ func imageExistsLocally(cli *client.Client, baseImage string) (bool, error){
 		// Check if the image name matches the one we are looking for
 		if image.RepoTags != nil {
 			for _, tag := range image.RepoTags {
-				// fmt.Println("image tag:",tag)
-				// fmt.Println("image name:",baseImage)
 				if tag == baseImage {
 					return true, nil
 				}
